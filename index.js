@@ -9,16 +9,17 @@ var StyleManifest = require('broccoli-style-manifest');
 
 module.exports = {
 
-  _getStyleFunnel: function() {
-    return new Merge([this._getPodStyleFunnel(), this._getClassicStyleFunnel()], {
+  _getStyleFunnel: function(excludeArray) {
+    return new Merge([this._getPodStyleFunnel(excludeArray), this._getClassicStyleFunnel()], {
       annotation: 'Merge (ember-component-css merge pod and classic styles)'
     });
   },
 
-  _getPodStyleFunnel: function() {
+  _getPodStyleFunnel: function(excludeArray) {
+    excludeArray = excludeArray || [];
     return new Funnel(this.projectRoot, {
       srcDir: this._podDirectory(),
-      exclude: ['styles/**/*'],
+      exclude: ['styles/**/*'].concat(excludeArray),
       include: ['**/*.{' + this.allowedStyleExtensions + ',}'],
       allowEmpty: true,
       annotation: 'Funnel (ember-component-css grab files)'
@@ -30,6 +31,16 @@ module.exports = {
       include: ['styles/' + this.classicStyleDir + '/**/*.{' + this.allowedStyleExtensions + ',}'],
       allowEmpty: true,
       annotation: 'Funnel (ember-component-css grab classic files)'
+    });
+  },
+
+  _getBundlePodStyleFunnel: function(includeArray) {
+    includeArray = includeArray || [];
+    return new Funnel(this.projectRoot, {
+      srcDir: this._podDirectory(),
+      include: includeArray,
+      allowEmpty: true,
+      annotation: 'Funnel (ember-component-css bundle files)'
     });
   },
 
@@ -90,6 +101,7 @@ module.exports = {
     this.classicStyleDir = this.addonConfig.classicStyleDir || 'component-styles';
     this.terseClassNames = Boolean(this.addonConfig.terseClassNames);
     this.allowedStyleExtensions = app.registry.extensionsForType('css').filter(Boolean);
+    this.styleBundleConfig = this.addonConfig.bundlesConfig || {};
   },
 
   config: function(enviroment) {
@@ -138,7 +150,36 @@ module.exports = {
   },
 
   processComponentStyles: function(tree) {
-    var podStyles = this._getStyleFunnel();
+
+    var podExcludeFiles = [];
+    var bundleStyleManifestList = [];
+
+    Object.keys(this.styleBundleConfig).forEach((bundleName)=> {
+      var bundleFilesArr = this.styleBundleConfig[bundleName];
+      podExcludeFiles = podExcludeFiles.concat(bundleFilesArr);
+      var bundlePodStyles = this._getBundlePodStyleFunnel(bundleFilesArr);
+      this._allPodStyles.push(bundlePodStyles);
+
+      if (this._namespacingIsEnabled()) {
+        bundlePodStyles = new ProcessStyles(bundlePodStyles, {
+          extensions: this.allowedStyleExtensions,
+          classicStyleDir: this.classicStyleDir,
+          terseClassNames: this.terseClassNames,
+          annotation: `Filter (ember-component-css process :--component bundleName=${bundleName} with class names)`
+        });
+      }
+
+      bundleStyleManifestList.push(bundlePodStyles);
+
+      var bundleStyleManifest = new StyleManifest(bundlePodStyles, {
+        outputFileNameWithoutExtension: `${bundleName}-pod-styles`,
+        annotation: `StyleManifest (ember-component-css bundleName=${bundleName}  combining all style files that there are extensions for)`
+      });
+
+      bundleStyleManifestList.push(bundleStyleManifest);
+    });
+
+    var podStyles = this._getStyleFunnel(podExcludeFiles);
     this._allPodStyles.push(podStyles);
 
     if (this._namespacingIsEnabled()) {
@@ -155,7 +196,8 @@ module.exports = {
       annotation: 'StyleManifest (ember-component-css combining all style files that there are extensions for)'
     });
 
-    tree = new Merge([podStyles, styleManifest, tree].filter(Boolean), {
+    tree = new Merge([podStyles, styleManifest].concat(bundleStyleManifestList, tree).filter(Boolean), {
+      overwrite: true,
       annotation: 'Merge (ember-component-css merge namespacedStyles with style manafest)'
     });
 
